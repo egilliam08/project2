@@ -17,6 +17,7 @@ from __future__ import annotations
 import socket
 import sys
 from typing import Iterable
+import struct
 
 
 # =============================================================================
@@ -79,36 +80,143 @@ def build_a_query(domain_name: str) -> bytes:
 # Rubric: display reply; extract next NS IP; display final A answers
 # =============================================================================
 
+def _read_name(data: bytes, offset: int) -> tuple[str, int]:
+    """
+    Parse a DNS name starting at `offset` in `data`.
+    Returns (name_string, offset_after_name).
+    Handles RFC 1035 §4.1.4 compression pointers.
+    """
+    labels = []
+    jumped = False
+    end_offset = offset
+    while True:
+        length = data[offset]
+        if length == 0:
+            if not jumped:
+                end_offset = offset + 1
+            offset += 1
+            break
+        elif (length & 0xC0) == 0xC0:
+            if not jumped:
+                end_offset = offset + 2  # caller resumes right after the 2-byte pointer
+                jumped = True
+            pointer = ((length & 0x3F) << 8) | data[offset + 1]
+            offset = pointer
+        else:
+            offset += 1
+            labels.append(data[offset:offset + length].decode('ascii'))
+            offset += length
+    return '.'.join(labels), end_offset
+
+def _parse_rr(data: bytes, offset: int) -> tuple[str, int, int, int, bytes, int]:
+    """
+    Parse one DNS Resource Record starting at `offset`.
+    Returns (name, rtype, rclass, ttl, rdata_bytes, new_offset).
+    """
+    name, offset = _read_name(data, offset)
+
+    rtype, rclass, ttl, rdlength = struct.unpack('!HHIH', data[offset:offset + 10])
+    offset += 10
+
+    rdata = data[offset:offset + rdlength]
+    offset += rdlength
+
+    return name, rtype, rclass, ttl, rdata, offset
+
+def _parse_reply(data: bytes) -> dict:
+    """
+    Parse a full DNS reply into a dict with keys:
+      'ancount', 'nscount', 'arcount',
+      'answers', 'authority', 'additional'
+    Each section is a list of dicts with keys:
+      'name', 'rtype', 'rdata'
+    """
+    # --- Header ---
+    _id, _flags, qdcount, ancount, nscount, arcount = struct.unpack('!HHHHHH', data[:12])
+    offset = 12
+
+    # --- Skip Question Section ---
+    # Each question: QNAME (variable) + QTYPE (2B) + QCLASS (2B)
+    for _ in range(qdcount):
+        _, offset = _read_name(data, offset)
+        offset += 4  # skip QTYPE + QCLASS
+
+    # --- Parse helper: loop N times, collect RR dicts ---
+    def parse_section(count):
+        nonlocal offset
+        records = []
+        for _ in range(count):
+            name, rtype, _rclass, _ttl, rdata, offset = _parse_rr(data, offset)
+            rec = {'name': name, 'rtype': rtype}
+            if rtype == 1:   # A record → decode IP immediately
+                rec['ip'] = socket.inet_ntoa(rdata)
+            elif rtype == 2: # NS record → rdata is a compressed name; decode it now
+                ns_name, _ = _read_name(data, offset - len(rdata))
+                rec['ns_name'] = ns_name
+            records.append(rec)
+        return records
+
+    answers    = parse_section(ancount)
+    authority  = parse_section(nscount)
+    additional = parse_section(arcount)
+
+    return {
+        'ancount': ancount,
+        'nscount': nscount,
+        'arcount': arcount,
+        'answers': answers,
+        'authority': authority,
+        'additional': additional,
+    }
 
 def format_reply_overview(reply: bytes) -> str:
-    """
-    Return multi-line text: counts + Answers / Authority / Additional sections (appendix style).
-
-    TODO (Member 3): parse reply and format like the sample output.
-    """
-    raise NotImplementedError("Team Member 3: implement format_reply_overview()")
+    parsed = _parse_reply(reply)
+    lines = []
+    # Counts
+    lines.append(f"{parsed['ancount']} Answers.")
+    lines.append(f"{parsed['nscount']} Intermediate Name Servers.")
+    lines.append(f"{parsed['arcount']} Additional Information Records.")
+    # Answers section
+    lines.append("Answers section:")
+    for r in parsed['answers']:
+        if r['rtype'] == 1:
+            lines.append(f"Name : {r['name']} IP: {r['ip']}")
+    # Authority section
+    lines.append("Authority Section:")
+    for r in parsed['authority']:
+        if r['rtype'] == 2:
+            lines.append(f"Name : {r['name']} Name Server: {r['ns_name']}")
+    # Additional section
+    lines.append("Additional Information Section:")
+    for r in parsed['additional']:
+        if r['rtype'] == 1:
+            lines.append(f"Name : {r['name']} IP : {r['ip']}")
+    return '\n'.join(lines)
 
 
 def has_authoritative_a_answers(reply: bytes, domain_name: str) -> bool:
-    """True if the Answer section contains A record(s) for domain_name (IPv4 terminal state)."""
-    raise NotImplementedError("Team Member 3: implement has_authoritative_a_answers()")
+    parsed = _parse_reply(reply)
+    return any(r['rtype'] == 1 for r in parsed['answers'])
 
 
 def iter_answer_ipv4s(reply: bytes, domain_name: str) -> Iterable[str]:
-    """Yield IPv4 dotted strings from A RRs in the Answer section for domain_name."""
-    raise NotImplementedError("Team Member 3: implement iter_answer_ipv4s()")
+    parsed = _parse_reply(reply)
+    for r in parsed['answers']:
+        if r['rtype'] == 1:
+            yield r['ip']
 
 
 def choose_next_nameserver_ip(reply: bytes) -> str | None:
-    """
-    Pick one NS from Authority, find glue A in Additional; return that IPv4 or None.
-
-    TODO (Member 3):
-      - If glue is missing for the chosen NS, a full resolver would resolve the NS name;
-        the assignment often assumes glue is present — document any fallback you add.
-    """
-    raise NotImplementedError("Team Member 3: implement choose_next_nameserver_ip()")
-
+    parsed = _parse_reply(reply)
+    # Collect all NS names from Authority section
+    ns_names = [r['ns_name'] for r in parsed['authority'] if r['rtype'] == 2]
+    # Build a lookup: nameserver hostname → IP from Additional section
+    glue = {r['name']: r['ip'] for r in parsed['additional'] if r['rtype'] == 1}
+    # Find the first NS that has a glue record
+    for ns_name in ns_names:
+        if ns_name in glue:
+            return glue[ns_name]
+    return None  # No glue found — caller must handle this
 
 # =============================================================================
 # Integration — argument parsing + iterative resolution loop
