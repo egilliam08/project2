@@ -1,15 +1,8 @@
-#!/usr/bin/env python3
 """
 CNT 4713 Project 2 — DNS iterative client (single-file submission).
 
 Run: python mydns.py <domain-name> <root-dns-ipv4>
 
-Workload (same module, marked sections below):
-  • TEAM MEMBER 1 — UDP send/receive (send_recv_dns); integration (main loop) after 2 & 3
-  • TEAM MEMBER 2 — Build query packets (build_a_query)
-  • TEAM MEMBER 3 — Parse replies, formatting, next server, final A records
-
-Everyone: RFC 1035 / textbook DNS; match assignment appendix output.
 """
 
 from __future__ import annotations
@@ -260,8 +253,9 @@ def choose_next_nameserver_ip(reply: bytes) -> str | None:
 
 # =============================================================================
 # Integration — argument parsing + iterative resolution loop
-# Owner: Team member 1 — implement AFTER Team members 2 & 3 finish their functions.
 # =============================================================================
+
+_MAX_RESOLUTION_STEPS = 64
 
 
 def usage() -> None:
@@ -274,13 +268,35 @@ def main(argv: list[str]) -> int:
         usage()
         return 1
 
-    # --- Integration (TODO: uncomment / implement when build_a_query + parsers exist) ---
+    domain_name = argv[1].rstrip(".").lower()
+    server_ip = argv[2]
 
-    print(
-        "Integration not wired yet — implement main() after teammates finish "
-        "build_a_query and the dns_parse helpers.",
-        file=sys.stderr,
-    )
+    for _ in range(_MAX_RESOLUTION_STEPS):
+        print("----------------------------------------------------------------")
+        print(f"DNS server to query: {server_ip}")
+
+        query_bytes = build_a_query(domain_name)
+        reply_bytes = send_recv_dns(server_ip, query_bytes)
+
+        print("Reply received. Content overview:")
+        print(format_reply_overview(reply_bytes))
+
+        if has_authoritative_a_answers(reply_bytes, domain_name):
+            print("----------------------------------------------------------------")
+            return 0
+
+        next_ip = choose_next_nameserver_ip(reply_bytes)
+        if next_ip is None:
+            print(
+                "Error: could not determine next nameserver IPv4 "
+                "(check NS records and glue A records in Additional section).",
+                file=sys.stderr,
+            )
+            return 2
+
+        server_ip = next_ip
+
+    print("Error: resolution exceeded maximum steps (possible loop).", file=sys.stderr)
     return 2
 
 
