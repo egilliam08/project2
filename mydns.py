@@ -71,7 +71,7 @@ def build_a_query(domain_name: str) -> bytes:
     if not domain_name:
         raise ValueError("domain_name must be non-empty")
 
-    # Accept input with or without a trailing dot.
+    # Accept input
     name = domain_name.rstrip(".")
     if not name:
         raise ValueError("domain_name must contain at least one label")
@@ -87,10 +87,9 @@ def build_a_query(domain_name: str) -> bytes:
         except UnicodeEncodeError as exc:
             raise ValueError("domain_name must contain ASCII labels only") from exc
 
-    # Transaction ID: random 16-bit value.
+    # Transaction ID: random 16-bit value
     txid = random.getrandbits(16)
 
-    # Standard query, recursion desired set.
     # QR=0, Opcode=0, AA=0, TC=0, RD=1, RA=0, Z=0, RCODE=0
     flags = 0x0100
 
@@ -101,7 +100,7 @@ def build_a_query(domain_name: str) -> bytes:
 
     header = struct.pack("!HHHHHH", txid, flags, qdcount, ancount, nscount, arcount)
 
-    # QNAME: sequence of length-prefixed labels terminated by zero byte.
+    # QNAME: terminated by zero byte.
     qname_parts = []
     for label in labels:
         label_bytes = label.encode("ascii")
