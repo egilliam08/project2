@@ -1,5 +1,5 @@
 """
-CNT 4713 Project 2 — DNS iterative client (single-file submission).
+CNT 4713 Project 2 — DNS iterative client.
 
 Run: python mydns.py <domain-name> <root-dns-ipv4>
 
@@ -14,7 +14,7 @@ import struct
 
 
 # =============================================================================
-# TEAM MEMBER 1 — UDP socket layer (DNS uses UDP port 53)
+# Michael — UDP socket layer (DNS uses UDP port 53)
 # Rubric: send/receive queries to root and intermediate servers
 # =============================================================================
 
@@ -50,7 +50,7 @@ def send_recv_dns(server_ip: str, request_bytes: bytes, timeout_sec: float = DEF
 
 
 # =============================================================================
-# TEAM MEMBER 2 — Build DNS query messages (RFC 1035)
+# Evan — Build DNS query messages (RFC 1035)
 # Rubric: valid wire format for “send query …”
 # =============================================================================
 
@@ -109,7 +109,7 @@ def build_a_query(domain_name: str) -> bytes:
 
 
 # =============================================================================
-# TEAM MEMBER 3 — Parse DNS replies (RFC 1035), appendix-style output
+# Ryan — Parse DNS replies (RFC 1035)
 # Rubric: display reply; extract next NS IP; display final A answers
 # =============================================================================
 
